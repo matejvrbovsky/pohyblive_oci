@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="supported-color-schemes" content="light dark" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Sledující oči</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: #1a1a1a;
+      overflow: hidden;
+      -webkit-overflow-scrolling: touch;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: Georgia, serif;
+    }
+
+    /* ── Plátno – CSS Grid, cols/rows nastavuje JS ── */
+    #canvas {
+      position: fixed;
+      top: 0; right: 0; bottom: 0; left: 0;
+      display: grid;
+      gap: 10px;                         /* větší rozestupy */
+      padding: 62px 12px 12px;
+      background: #1a1a1a url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.07'/%3E%3C/svg%3E");
+      transition: background-color 0.8s ease;
+      touch-action: none;
+    }
+    #canvas.flee { background-color: #1e0a0a; }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * UI PANEL – přepínač nahoře uprostřed
+     * Na mobilu větší touch target (min 44px výška dle HIG)
+     * ══════════════════════════════════════════════════════════════════ */
+    #ui {
+      position: fixed;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 400;
+    }
+
+    #mode-toggle {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(255,255,255,0.08);
+      border: 1.5px solid rgba(255,255,255,0.16);
+      border-radius: 999px;
+      /* Mobilní touch target: min výška 44px, min šířka pohodlná */
+      padding: 10px 20px 10px 14px;
+      cursor: pointer;
+      transition: background 0.4s, border-color 0.4s;
+      -webkit-tap-highlight-color: transparent;
+      white-space: nowrap;
+    }
+    #mode-toggle:hover  { background: rgba(255,255,255,0.13); }
+    #mode-toggle.flee   {
+      background: rgba(200,30,30,0.20);
+      border-color: rgba(220,60,60,0.40);
+    }
+
+    /* Toggle pill */
+    .toggle-pip {
+      width: 36px; height: 20px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 999px;
+      position: relative;
+      flex-shrink: 0;
+      transition: background 0.4s;
+    }
+    .toggle-pip::after {
+      content: '';
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.70);
+      transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1), background 0.4s;
+    }
+    #mode-toggle.flee .toggle-pip            { background: rgba(220,60,60,0.40); }
+    #mode-toggle.flee .toggle-pip::after     { transform: translateX(16px); background: #e05050; }
+
+    .toggle-icon  { font-size: 1.15rem; line-height: 1; transition: transform 0.4s; }
+    #mode-toggle.flee .toggle-icon           { transform: rotate(180deg); }
+
+    .toggle-label {
+      font-size: clamp(0.68rem, 2.2vw, 0.82rem);
+      letter-spacing: 0.20em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.60);
+      transition: color 0.4s;
+    }
+    #mode-toggle.flee .toggle-label          { color: rgba(220,110,110,0.90); }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * OKO
+     * ══════════════════════════════════════════════════════════════════ */
+    .eye {
+      position: relative;
+      width: 100%; height: 100%;
+      background: #f5f5f0;
+      border-radius: 50%;
+      border: 2px solid #0a0a0a;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.55), inset 0 -3px 8px rgba(0,0,0,0.09);
+      overflow: hidden;
+      transform-origin: center;
+      will-change: transform;
+      opacity: 0;
+      cursor: pointer;
+      transition: opacity 0.3s ease, transform 0.35s cubic-bezier(0.34,1.56,0.64,1);
+      -webkit-tap-highlight-color: transparent;
+    }
+    /* Highlight */
+    .eye::before {
+      content: '';
+      position: absolute;
+      top: 10%; left: 15%;
+      width: 30%; height: 22%;
+      background: radial-gradient(ellipse at 40% 40%, rgba(255,255,255,0.82) 0%, transparent 80%);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* Klik-mrknutí */
+    .eye.blink-click { animation: blink-click 0.22s ease forwards; }
+    @keyframes blink-click {
+      0%   { transform: scaleY(1); }
+      30%  { transform: scaleY(0.03); }
+      60%  { transform: scaleY(0.03); }
+      100% { transform: scaleY(1); }
+    }
+    /* Náhodné mrknutí */
+    .eye.blink-auto { animation: blink-auto 0.2s ease forwards; }
+    @keyframes blink-auto {
+      0%   { transform: scaleY(1); }
+      35%  { transform: scaleY(0.05); }
+      65%  { transform: scaleY(0.05); }
+      100% { transform: scaleY(1); }
+    }
+
+    /* ── Duhovka ── */
+    .iris {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 60%; height: 60%;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      will-change: transform;
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+    }
+    .iris.returning {
+      transition: transform 0.4s cubic-bezier(0.25,0.46,0.45,0.94);
+    }
+
+    /* ── Zornice ── */
+    .pupil {
+      position: absolute;
+      top: 50%; left: 50%;
+      width: 48%; height: 48%;
+      border-radius: 50%;
+      background: #080808;
+      transform: translate(-50%, -50%);
+      box-shadow: inset 0 1px 3px rgba(255,255,255,0.12);
+    }
+    .pupil::after {
+      content: '';
+      position: absolute;
+      top: 14%; right: 16%;
+      width: 28%; height: 28%;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.65);
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * LEGENDA – jen na desktopu (≥ 700px šířka)
+     * Na mobilu skryta, aby nepřekrývala oči
+     * ══════════════════════════════════════════════════════════════════ */
+    #legenda {
+      position: fixed;
+      bottom: 14px;
+      left: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      pointer-events: none;
+      z-index: 300;
+    }
+    /* Skrýt na úzkých displejích */
+    @media (max-width: 699px) { #legenda { display: none; } }
+
+    .leg-radek {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: clamp(0.46rem, 1.2vw, 0.60rem);
+      color: rgba(255,255,255,0.26);
+      font-family: monospace;
+    }
+    .leg-vzorek {
+      width: 10px; height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      border: 1px solid rgba(255,255,255,0.14);
+    }
+
+    /* ── FPS – vpravo dole ── */
+    #fps {
+      position: fixed;
+      bottom: 10px;
+      right: 14px;
+      font-size: 0.60rem;
+      color: rgba(255,255,255,0.15);
+      font-family: monospace;
+      pointer-events: none;
+      z-index: 300;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="canvas"></div>
+
+  <div id="ui">
+    <button id="mode-toggle" aria-pressed="false" title="Přepnout režim">
+      <div class="toggle-pip"></div>
+      <span class="toggle-icon">👁️</span>
+      <span class="toggle-label" id="mode-label">Sledování</span>
+    </button>
+  </div>
+
+  <div id="legenda"></div>
+  <div id="fps"></div>
+
+  <script>
+  (() => {
+    'use strict';
+
+    /* ══════════════════════════════════════════════════════════════════
+     * KONFIGURACE
+     * ══════════════════════════════════════════════════════════════════ */
+    const ZOBRAZ_FPS  = true;
+
+    // Paralaxa
+    const PARALAX_MIN = 0.70;
+    const PARALAX_MAX = 1.00;
+
+    // Gap a padding musí sedět s CSS
+    const GAP      = 10;
+    const PAD_TOP  = 62;
+    const PAD_SIDE = 12;
+
+    /* ══════════════════════════════════════════════════════════════════
+     * DYNAMICKÝ POČET OČÍ podle velikosti obrazovky
+     * Breakpointy: mobil < 600px → 35 očí
+     *              tablet 600–1024px → 60 očí
+     *              desktop ≥ 1024px → 100 očí
+     * Vrátí číslo jehož dělitelé dávají pěkné obdélníkové mřížky.
+     * ══════════════════════════════════════════════════════════════════ */
+    function početOčí(vw) {
+      if (vw < 600)  return 35;   // mobil – přizpůsobíme mřížku dynamicky
+      if (vw < 1024) return 60;   // tablet
+      return 100;                 // desktop
+    }
+
+    /* Poměr šířka/výška oka dle orientace */
+    function pomerOka(vw, vh) { return vw < vh ? 1.20 : 1.55; }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * STAV
+     * ══════════════════════════════════════════════════════════════════ */
+    let rezimStrac = false;
+    let myšX       = window.innerWidth  / 2;
+    let myšY       = window.innerHeight / 2;
+    let aktivní    = true;
+    let oči        = [];
+    let POCET_OCI  = početOčí(window.innerWidth);
+
+    /* ══════════════════════════════════════════════════════════════════
+     * BARVY DUHOVKY – světová populace
+     * Gradient jako přímý string → max kompatibilita Safari iOS
+     * ══════════════════════════════════════════════════════════════════ */
+    const BARVY = [
+      { prob:0.55, název:'Hnědá',        tečka:'#7b4a1e', ic:'#c4832e', im:'#7b4a1e', io:'#3a1e08' },
+      { prob:0.10, název:'Tmavě hnědá',  tečka:'#3a1e08', ic:'#5c300f', im:'#321408', io:'#150800' },
+      { prob:0.08, název:'Lísková',      tečka:'#7a5c28', ic:'#a87c3a', im:'#6b5228', io:'#2e1e08' },
+      { prob:0.05, název:'Jantarová',    tečka:'#c07d1a', ic:'#eeaa32', im:'#c07d1a', io:'#6b3e05' },
+      { prob:0.10, název:'Modrá',        tečka:'#2a5f8a', ic:'#7ab3d8', im:'#2a5f8a', io:'#0f2a42' },
+      { prob:0.05, název:'Světle modrá', tečka:'#6aafd4', ic:'#aad4ee', im:'#6aafd4', io:'#2a6080' },
+      { prob:0.03, název:'Šedá',         tečka:'#7a8088', ic:'#a8aeb8', im:'#7a8088', io:'#303438' },
+      { prob:0.02, název:'Zelená',       tečka:'#4a7c40', ic:'#78b86a', im:'#4a7c40', io:'#1e3c18' },
+      { prob:0.02, název:'Šedozelená',   tečka:'#5a7260', ic:'#7e9e84', im:'#5a7260', io:'#253028' },
+    ];
+    const KUM = (() => { let s=0; return BARVY.map(b=>(s+=b.prob,s)); })();
+
+    function náhodnáBarva() {
+      const r=Math.random();
+      return BARVY[Math.max(0, KUM.findIndex(p=>r<p))];
+    }
+    function gradientDuhovky(b) {
+      return `radial-gradient(circle at 36% 36%, ${b.ic} 0%, ${b.im} 48%, ${b.io} 100%)`;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * PŘEPÍNAČ REŽIMU
+     * ══════════════════════════════════════════════════════════════════ */
+    const btnToggle = document.getElementById('mode-toggle');
+    const lblRežim  = document.getElementById('mode-label');
+    const cvs       = document.getElementById('canvas');
+
+    function přepniRežim() {
+      rezimStrac = !rezimStrac;
+      btnToggle.classList.toggle('flee', rezimStrac);
+      btnToggle.setAttribute('aria-pressed', rezimStrac);
+      cvs.classList.toggle('flee', rezimStrac);
+      lblRežim.textContent = rezimStrac ? 'Strach' : 'Sledování';
+      btnToggle.querySelector('.toggle-icon').textContent = rezimStrac ? '😱' : '👁️';
+    }
+    btnToggle.addEventListener('click', přepniRežim);
+
+    /* ══════════════════════════════════════════════════════════════════
+     * VÝPOČET MŘÍŽKY
+     *
+     * Pro zadaný počet očí N hledáme (cols × rows = N) takové,
+     * aby plocha jednoho oka byla maximální.
+     *
+     * Pro N bez pěkných dělitelů (35, 60) prohledáváme všechny
+     * kombinace cols 1..N a rows = ceil(N/cols) – poslední řada
+     * může mít méně buněk, ale mřížka zůstane vizuálně kompaktní.
+     * ══════════════════════════════════════════════════════════════════ */
+    function vypočtiMřížku(vw, vh, n) {
+      const PR = pomerOka(vw, vh);
+      let nejCols=1, nejPlocha=0;
+      for (let c=1; c<=n; c++) {
+        const r  = Math.ceil(n/c);
+        const bW = (vw - PAD_SIDE*2 - GAP*(c-1)) / c;
+        const bH = (vh - PAD_TOP    - PAD_SIDE - GAP*(r-1)) / r;
+        const eW = Math.min(bW, bH*PR);
+        if (eW <= 0) continue;
+        const pl = eW * (eW/PR);
+        if (pl > nejPlocha) { nejPlocha=pl; nejCols=c; }
+      }
+      return { cols: nejCols, rows: Math.ceil(n/nejCols) };
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * LEGENDA
+     * ══════════════════════════════════════════════════════════════════ */
+    function sestavLegend(počty) {
+      const el=document.getElementById('legenda');
+      el.innerHTML='';
+      BARVY.map((b,i)=>({...b,n:počty[i]}))
+        .filter(b=>b.n>0).sort((a,c)=>c.n-a.n)
+        .forEach(b=>{
+          const ř=document.createElement('div'); ř.className='leg-radek';
+          const vz=document.createElement('div'); vz.className='leg-vzorek';
+          vz.style.background=b.tečka;
+          const tx=document.createElement('span');
+          tx.textContent=`${b.název} ${b.n}× (${Math.round(b.prob*100)}%)`;
+          ř.append(vz,tx); el.appendChild(ř);
+        });
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * SESTAVENÍ OČÍ
+     * ══════════════════════════════════════════════════════════════════ */
+    function postav() {
+      const vw = cvs.clientWidth  || window.innerWidth;
+      const vh = cvs.clientHeight || window.innerHeight;
+
+      // Přepočítat počet očí dle aktuální šířky
+      POCET_OCI = početOčí(vw);
+
+      const {cols, rows} = vypočtiMřížku(vw, vh, POCET_OCI);
+
+      cvs.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+      cvs.style.gridTemplateRows    = `repeat(${rows}, 1fr)`;
+
+      cvs.innerHTML = '';
+      oči = [];
+      const frag  = document.createDocumentFragment();
+      const počty = new Array(BARVY.length).fill(0);
+
+      for (let i=0; i<POCET_OCI; i++) {
+        const barva = náhodnáBarva();
+        počty[BARVY.indexOf(barva)]++;
+        const citlivost = PARALAX_MIN + Math.random()*(PARALAX_MAX-PARALAX_MIN);
+
+        const eyeEl  = document.createElement('div');
+        eyeEl.className = 'eye';
+        eyeEl.style.transform = 'scale(0.4)';
+
+        const irisEl = document.createElement('div');
+        irisEl.className = 'iris';
+        irisEl.style.background = gradientDuhovky(barva);
+
+        const zorEl  = document.createElement('div');
+        zorEl.className = 'pupil';
+
+        irisEl.appendChild(zorEl);
+        eyeEl.appendChild(irisEl);
+        frag.appendChild(eyeEl);
+
+        oči.push({ eye:eyeEl, iris:irisEl, cx:0, cy:0, maxDist:0, citlivost });
+
+        // Klik / tap → mrknutí + změna barvy duhovky
+        // Safari macOS: pointerdown + click jako fallback
+        let _blokujKlik = false;
+        function handleKlik(e) {
+          if (e.type === 'click' && _blokujKlik) { _blokujKlik=false; return; }
+          if (e.type === 'pointerdown') _blokujKlik = true;
+          e.stopPropagation();
+          if (eyeEl.classList.contains('blink-click') ||
+              eyeEl.classList.contains('blink-auto')) return;
+          eyeEl.classList.add('blink-click');
+          eyeEl.addEventListener('animationend', () => {
+            eyeEl.classList.remove('blink-click');
+            eyeEl.style.transform = 'scale(1)';
+            // Nová barva se aplikuje uprostřed mrknutí – přirozený přechod
+            const aktuální = irisEl.style.background;
+            let nová;
+            do { nová = náhodnáBarva(); }
+            while (gradientDuhovky(nová) === aktuální);
+            irisEl.style.background = gradientDuhovky(nová);
+          }, { once: true });
+        }
+        eyeEl.addEventListener('pointerdown', handleKlik);
+        eyeEl.addEventListener('click', handleKlik);
+      }
+
+      cvs.appendChild(frag);
+      sestavLegend(počty);
+      cachePolohy();
+
+      // Staggered pop-in – rychlejší na mobilu (méně očí)
+      const krokMs = POCET_OCI <= 40 ? 20 : 13;
+      oči.forEach(({eye}, i) => {
+        setTimeout(() => {
+          eye.style.transform = 'scale(1)';
+          eye.style.opacity   = '1';
+          setTimeout(() => naplánujMrknutí(eye), 500 + Math.random()*2500);
+        }, i*krokMs + (Math.random()*15|0));
+      });
+    }
+
+    /* Cachovat středové souřadnice – žádný getBCR v render loopu */
+    function cachePolohy() {
+      void cvs.offsetWidth;  // flush layout
+      oči.forEach(e => {
+        const r    = e.eye.getBoundingClientRect();
+        e.cx       = r.left + r.width  / 2;
+        e.cy       = r.top  + r.height / 2;
+        e.maxDist  = Math.min(r.width, r.height) * 0.45;
+      });
+    }
+
+    // Debounce resize – přegenerovat při změně velikosti
+    let timerResize;
+    window.addEventListener('resize', () => {
+      clearTimeout(timerResize);
+      timerResize = setTimeout(postav, 180);
+    });
+
+    /* ══════════════════════════════════════════════════════════════════
+     * RAF RENDER LOOP
+     * ══════════════════════════════════════════════════════════════════ */
+    function renderFrame() {
+      if (aktivní) {
+        const mx=myšX, my=myšY;
+        for (let i=0; i<oči.length; i++) {
+          const {iris, cx, cy, maxDist, citlivost} = oči[i];
+          if (iris.classList.contains('returning')) continue;
+
+          let dx=mx-cx, dy=my-cy;
+          if (rezimStrac) { dx=-dx; dy=-dy; }   // Strach: pohled od kurzoru
+
+          const dist   = Math.sqrt(dx*dx + dy*dy);
+          const úhel   = Math.atan2(dy, dx);
+          const efDist = Math.min(dist, maxDist) * citlivost;
+          const ox     = (Math.cos(úhel)*efDist).toFixed(2);
+          const oy     = (Math.sin(úhel)*efDist).toFixed(2);
+          iris.style.transform = `translate(calc(-50% + ${ox}px),calc(-50% + ${oy}px))`;
+        }
+      }
+      requestAnimationFrame(renderFrame);
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * EVENTS
+     * ══════════════════════════════════════════════════════════════════ */
+    window.addEventListener('mousemove', e => {
+      myšX=e.clientX; myšY=e.clientY; aktivní=true;
+    });
+
+    window.addEventListener('touchmove', e => {
+      if (e.target.closest('#ui')) return;
+      e.preventDefault();
+      const t=e.touches[0];
+      myšX=t.clientX; myšY=t.clientY; aktivní=true;
+    }, { passive: false });
+
+    window.addEventListener('touchstart', e => {
+      if (e.target.closest('#ui')) return;
+      const t=e.touches[0];
+      myšX=t.clientX; myšY=t.clientY; aktivní=true;
+    }, { passive: true });
+
+    function resetujVšechny(e) {
+      if (e && e.target && e.target.closest('#ui')) return;
+      aktivní = false;
+      oči.forEach(({iris}) => {
+        iris.classList.add('returning');
+        iris.style.transform = 'translate(-50%,-50%)';
+        iris.addEventListener('transitionend',
+          () => iris.classList.remove('returning'), { once: true });
+      });
+    }
+
+    document.documentElement.addEventListener('mouseleave', resetujVšechny);
+    window.addEventListener('touchend',    resetujVšechny);
+    window.addEventListener('touchcancel', resetujVšechny);
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        resetujVšechny();
+        oči.forEach(({eye}) => eye.classList.add('blink-auto'));
+      } else aktivní = true;
+    });
+
+    /* ══════════════════════════════════════════════════════════════════
+     * NÁHODNÉ MRKÁNÍ – interval 3–10 s
+     * ══════════════════════════════════════════════════════════════════ */
+    function naplánujMrknutí(eyeEl) {
+      setTimeout(() => {
+        if (eyeEl.classList.contains('blink-click')) {
+          naplánujMrknutí(eyeEl); return;
+        }
+        eyeEl.classList.add('blink-auto');
+        eyeEl.addEventListener('animationend', () => {
+          eyeEl.classList.remove('blink-auto');
+          eyeEl.style.transform = 'scale(1)';
+          naplánujMrknutí(eyeEl);
+        }, { once: true });
+      }, 3000 + Math.random()*7000);
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * FPS COUNTER
+     * ══════════════════════════════════════════════════════════════════ */
+    if (ZOBRAZ_FPS) {
+      const fpsEl=document.getElementById('fps');
+      let fr=0, lt=performance.now();
+      (function smyčka(ts) {
+        if (++fr, ts-lt>=1000) { fpsEl.textContent=fr+' fps'; fr=0; lt=ts; }
+        requestAnimationFrame(smyčka);
+      })(performance.now());
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+     * INIT
+     * ══════════════════════════════════════════════════════════════════ */
+    postav();
+    requestAnimationFrame(renderFrame);
+
+  })();
+  </script>
+</body>
+</html>
